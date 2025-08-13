@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vibe Meeting - AI赋能组会讨论</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles-realtime.css">
+    <link rel="stylesheet" href="loading.css">
+    <!-- 预加载关键资源 -->
+    <link rel="preload" href="./libs/fontawesome.min.css" as="style">
+    <link rel="preload" href="./libs/socket.io.min.js" as="script">
+    <link rel="preload" href="app.js" as="script">
+    <link rel="preload" href="realtime-client.js" as="script">
+    
+    <!-- 本地样式和脚本 - 消除所有外网依赖 -->
+    <link href="./libs/fontawesome.min.css" rel="stylesheet">
+    <script defer src="./libs/pdf.min.js"></script>
+    <script defer src="./libs/mammoth.browser.min.js"></script>
+    <script defer src="./libs/xlsx.full.min.js"></script>
+    <script src="./libs/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- 快速加载指示器 -->
+    <div id="loading-overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#f8f9fa;z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;">
+        <div style="text-align:center;">
+            <div style="width:40px;height:40px;border:3px solid #e3e3e3;border-top:3px solid #007bff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px;"></div>
+            <div style="color:#666;font-size:14px;">正在加载会议系统...</div>
+            <div id="load-progress" style="color:#999;font-size:12px;margin-top:8px;">初始化中</div>
+        </div>
+    </div>
+    <style>
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+
+    <div class="app-container">
+        <div id="network-indicator" style="position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.6);color:#fff;padding:6px 10px;border-radius:12px;font-size:12px;z-index:9999;display:none;">
+            网络: <span id="latency-rtt">--</span>ms (RTT)
+        </div>
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-users"></i> Vibe Meeting</h1>
+                <p>AI讨论平台</p>
+            </div>
+            <div class="room-info">
+                <span class="room-id" id="roomId">房间: meeting-001</span>
+                <button class="btn-secondary" onclick="copyRoomId(event)">
+                    <i class="fas fa-copy"></i> 复制房间号
+                </button>
+
+            </div>
+        </header>
+
+        <!-- 移动端导航 -->
+        <div class="mobile-nav" id="mobileNav" style="display: none;">
+            <button class="mobile-nav-btn active" data-tab="chat">
+                <i class="fas fa-comments"></i>
+                <span>聊天</span>
+            </button>
+            <button class="mobile-nav-btn" data-tab="participants">
+                <i class="fas fa-user-friends"></i>
+                <span>成员</span>
+            </button>
+            <button class="mobile-nav-btn" data-tab="ai">
+                <i class="fas fa-robot"></i>
+                <span>AI工具</span>
+            </button>
+        </div>
+
+        <main class="main-content">
+            <div class="left-sidebar">
+                <button class="sidebar-close" id="sidebarClose" style="display: none;">
+                    <i class="fas fa-times"></i>
+                </button>
+                <div class="participants-panel">
+                    <h3><i class="fas fa-user-friends"></i> 在线成员</h3>
+                    <div class="participants-search">
+                        <input type="text" id="participantsSearch" placeholder="搜索在线成员..." class="search-input">
+                        <i class="fas fa-search search-icon"></i>
+                    </div>
+                    <div class="participants-list" id="participantsList">
+                        <!-- 参与者将在这里动态添加 -->
+                    </div>
+                </div>
+                
+                <!-- 实时转录面板 (现在在左侧在线成员下方) -->
+                <div class="transcription-panel">
+                    <div class="transcription-header">
+                        <h3><i class="fas fa-closed-captioning"></i> 实时转录</h3>
+                        <div class="transcription-actions">
+                            <button class="btn-download" id="downloadBtn" onclick="downloadTranscription()" title="下载转录文档" style="display: none;">
+                                <i class="fas fa-download"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="transcription-controls">
+                        <!-- Assembly转录按钮已隐藏 -->
+                        <button class="btn-start-recording" id="startRecordBtn" onclick="startTranscription()" style="display: none;">
+                            <i class="fas fa-microphone"></i> Assembly转录
+                        </button>
+                        <button class="btn-stop-recording" id="stopRecordBtn" onclick="stopTranscription()" style="display: none;">
+                            <i class="fas fa-stop"></i> 停止Assembly转录
+                        </button>
+                        
+                        <!-- 科大讯飞转录按钮 -->
+                        <button class="btn-xfyun-recording" id="xfyunStartBtn" onclick="startXfyunTranscription()" title="开始科大讯飞实时转录">
+                            <i class="fas fa-microphone"></i> 科大讯飞转录
+                        </button>
+                        <button class="btn-xfyun-stop" id="xfyunStopBtn" onclick="stopXfyunTranscription()" style="display: none;" title="停止科大讯飞转录">
+                            <i class="fas fa-stop"></i> 停止科大讯飞转录
+                        </button>
+                        
+                        <div class="transcription-status" id="transcriptionStatus">
+                            <i class="fas fa-microphone-slash"></i>
+                            <span>转录已停止</span>
+                        </div>
+                    </div>
+                    <div class="transcription-content" id="transcriptionContent">
+                        <div class="transcription-history" id="transcriptionHistory">
+                            <div class="transcription-placeholder">
+                                <i class="fas fa-info-circle"></i>
+                                <p><strong>使用说明：</strong></p>
+                                <p>1. 请先加入语音通话（发起通话或接听邀请）</p>
+                                <p>2. 通话中的任何参与者都可以使用转录功能</p>
+                                <p>3. 点击"科大讯飞转录"按钮开始语音转录</p>
+                                <p>4. 支持中英文实时转录，转录结果同步到所有参与者</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                
+                <!-- Hugging Face环境提示 -->
+                <div class="hf-notice" id="hfNotice" style="display: none;">
+                    <div class="notice-content">
+                        <i class="fas fa-info-circle"></i>
+                        <h4>💡 数据保存提示</h4>
+                        <p>在Hugging Face环境下，每次刷新页面数据会重置。</p>
+                        <p><strong>保存方法：</strong>数据会自动保存到服务器，无需手动操作</p>
+                        <p><strong>恢复方法：</strong>使用相同的房间号重新加入即可</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="chat-container">
+                <div class="chat-header">
+                    <h3><i class="fas fa-comments"></i> 讨论记录</h3>
+                    <div class="chat-search">
+                        <input type="text" id="chatSearchInput" placeholder="搜索聊天记录..." class="search-input">
+                        <i class="fas fa-search search-icon"></i>
+                    </div>
+                    <div class="status-indicators">
+                        <div class="connection-status">
+                            <span class="connection-indicator" id="connectionStatus">
+                                <i class="fas fa-wifi"></i> 连接中...
+                            </span>
+                        </div>
+                        <div class="ai-status">
+                            <span class="ai-indicator" id="aiStatus">
+                                <i class="fas fa-robot"></i> AI正在待命...
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="messages-container" id="messagesContainer">
+                    <!-- 消息将在这里动态添加 -->
+                </div>
+
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <textarea 
+                            id="messageInput" 
+                            placeholder="输入您的消息... 或拖拽文件到此处上传 (按Enter发送，Shift+Enter换行)"
+                            rows="1"
+                        ></textarea>
+                        <button class="btn-primary" onclick="sendMessage()" id="sendButton">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <div class="input-actions">
+                        <button class="btn-ask-ai" onclick="askAI()">
+                            <i class="fas fa-question-circle"></i> 询问AI
+                        </button>
+                        <button class="btn-summarize" onclick="generateSummary()">
+                            <i class="fas fa-file-alt"></i> 生成总结
+                        </button>
+                        <button class="btn-upload" onclick="triggerFileUpload()">
+                            <i class="fas fa-upload"></i> 上传文件
+                        </button>
+                        <button class="btn-voice" id="voiceBtn" onclick="toggleVoiceRecording()" title="语音录制">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        <button class="btn-transcribe" id="transcribeBtn" onclick="toggleTranscription()" title="实时转录">
+                            <i class="fas fa-closed-captioning"></i>
+                        </button>
+                        <button class="btn-call" id="callBtn" onclick="toggleVoiceCall()" title="语音通话">
+                            <i class="fas fa-phone"></i>
+                        </button>
+                        <button class="btn-join-call" id="joinCallBtn" onclick="joinOngoingCall()" title="加入正在进行的通话" style="display: none;">
+                            <i class="fas fa-phone-volume"></i> 加入通话
+                        </button>
+                        <button class="btn-test-mic" id="testMicBtn" onclick="testMicrophonePermission()" title="测试麦克风">
+                            <i class="fas fa-microphone-slash"></i>
+                        </button>
+                        <input type="file" id="fileInput" style="display: none" multiple>
+                    </div>
+                    <div class="upload-zone" id="uploadZone" style="display: none;">
+                        <div class="upload-zone-content">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                            <p>拖拽文件到此处上传</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="right-sidebar">
+                <button class="sidebar-close" id="aiPanelClose" style="display: none;">
+                    <i class="fas fa-times"></i>
+                </button>
+                
+                <!-- AI工具箱面板 (现在在顶部) -->
+                <div class="ai-toolbox-panel">
+                    <h3><i class="fas fa-robot"></i> AI工具箱</h3>
+                    <div class="toolbox-content">
+                        <div class="toolbox-placeholder" id="toolboxPlaceholder">
+                            <i class="fas fa-magic"></i>
+                            <p>选择文件后使用AI工具</p>
+                        </div>
+                        <div class="toolbox-active" id="toolboxActive" style="display: none;">
+                            <div class="current-file">
+                                <i class="fas fa-file"></i>
+                                <span id="currentFileName">文件名</span>
+                            </div>
+                            <div class="toolbox-buttons">
+                                <button class="tool-btn" id="ocrBtn" onclick="performOCR()" title="OCR文字识别">
+                                    <i class="fas fa-eye"></i>
+                                    <span>文字识别</span>
+                                </button>
+                                <button class="tool-btn" id="translateBtn" onclick="translateText()" title="翻译文本">
+                                    <i class="fas fa-language"></i>
+                                    <span>翻译</span>
+                                </button>
+                                <button class="tool-btn" id="summarizeBtn" onclick="summarizeText()" title="总结内容">
+                                    <i class="fas fa-file-text"></i>
+                                    <span>总结</span>
+                                </button>
+                                <button class="tool-btn" id="keywordsBtn" onclick="extractKeywords()" title="提取关键词">
+                                    <i class="fas fa-key"></i>
+                                    <span>关键词</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="toolbox-loading" id="toolboxLoading" style="display: none;">
+                            <div class="loading-spinner">
+                                <div class="spinner"></div>
+                                <p>AI处理中...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="ai-summary-panel">
+                    <h3><i class="fas fa-clipboard-list"></i> AI总结</h3>
+                    <div class="summary-content" id="summaryContent">
+                        <p class="empty-summary">讨论开始后，AI将为您生成智能总结...</p>
+                    </div>
+                    <button class="btn-export" onclick="exportSummary()">
+                        <i class="fas fa-download"></i> 导出总结
+                    </button>
+                </div>
+                
+
+            </div>
+        </main>
+    </div>
+
+    <!-- 用户名设置对话框 -->
+    <div class="modal" id="usernameModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>欢迎加入会议</h3>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="usernameInput">您的姓名</label>
+                    <input 
+                        type="text" 
+                        id="usernameInput" 
+                        placeholder="请输入您的姓名"
+                        maxlength="20"
+                        autocomplete="off"
+                    />
+                </div>
+                
+                <div class="input-group">
+                    <label for="roomInput">房间号</label>
+                    <input 
+                        type="text" 
+                        id="roomInput" 
+                        placeholder="留空创建新房间"
+                        maxlength="20"
+                        autocomplete="off"
+                    />
+                    <small>已有房间号？输入即可加入讨论</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="createNewRoom()">新建房间</button>
+                <button class="btn-primary" onclick="setUsername()">加入会议</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 询问AI对话框 -->
+    <div class="modal" id="askAIModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>询问AI</h3>
+                <button class="modal-close" onclick="closeAskAIModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea 
+                    id="aiQuestionInput" 
+                    placeholder="请输入您的问题..."
+                    rows="3"
+                ></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeAskAIModal()">取消</button>
+                <button class="btn-primary" onclick="submitAIQuestion()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 语音录制对话框 -->
+    <div class="modal" id="voiceModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>语音录制</h3>
+                <button class="modal-close" onclick="closeVoiceModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="voice-recorder">
+                    <div class="voice-status" id="voiceStatus">
+                        <i class="fas fa-microphone"></i>
+                        <span>点击开始录制</span>
+                    </div>
+                    <div class="voice-controls">
+                        <button class="btn-record" id="recordBtn" onclick="startRecording()">
+                            <i class="fas fa-microphone"></i> 开始录制
+                        </button>
+                        <button class="btn-stop" id="stopBtn" onclick="stopRecording()" style="display: none;">
+                            <i class="fas fa-stop"></i> 停止录制
+                        </button>
+                        <button class="btn-play" id="playBtn" onclick="playRecording()" style="display: none;">
+                            <i class="fas fa-play"></i> 播放
+                        </button>
+                    </div>
+                    <div class="voice-transcript" id="voiceTranscript" style="display: none;">
+                        <h4>转录文本</h4>
+                        <textarea id="transcriptText" placeholder="转录文本将在这里显示..." rows="4"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeVoiceModal()">取消</button>
+                <button class="btn-primary" id="sendVoiceBtn" onclick="sendVoiceMessage()" style="display: none;">
+                    <i class="fas fa-paper-plane"></i> 发送语音
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <!-- 正在进行的通话提示 -->
+    <div class="ongoing-call-notice" id="ongoingCallNotice" style="display: none;">
+        <div class="notice-content">
+            <div class="notice-info">
+                <i class="fas fa-phone"></i>
+                <span>房间内有正在进行的语音通话</span>
+                <span id="ongoingCallParticipants">2 人通话中</span>
+            </div>
+            <div class="notice-actions">
+                <button class="btn-join-ongoing" onclick="joinOngoingCall()">
+                    <i class="fas fa-phone-volume"></i> 加入通话
+                </button>
+                <button class="btn-dismiss-notice" onclick="dismissCallNotice()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 语音通话面板 -->
+    <div class="voice-call-panel" id="voiceCallPanel" style="display: none;">
+        <div class="call-header">
+            <h3><i class="fas fa-phone"></i> 语音通话</h3>
+            <div class="call-info">
+                <span id="callDuration">00:00</span>
+                <span id="callParticipants">0 人参与</span>
+            </div>
+            <button class="call-close" onclick="endVoiceCall()">&times;</button>
+        </div>
+        <div class="call-content">
+            <div class="call-participants" id="callParticipantsList">
+                <!-- 通话参与者列表 -->
+            </div>
+            <div class="call-controls">
+                <button class="call-control-btn" id="muteBtn" onclick="toggleMute()" title="静音">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <button class="call-control-btn" id="speakerBtn" onclick="toggleSpeaker()" title="扬声器">
+                    <i class="fas fa-volume-up"></i>
+                </button>
+                <button class="call-control-btn call-end" onclick="endVoiceCall()" title="结束通话">
+                    <i class="fas fa-phone-slash"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 来电提示 -->
+    <div class="incoming-call-modal" id="incomingCallModal" style="display: none;">
+        <div class="incoming-call-content">
+            <div class="caller-info">
+                <i class="fas fa-phone"></i>
+                <h4 id="incomingCallerName">来电</h4>
+                <p>语音通话邀请</p>
+            </div>
+            <div class="incoming-call-controls">
+                <button class="btn-accept" onclick="acceptCall()">
+                    <i class="fas fa-phone"></i> 接听
+                </button>
+                <button class="btn-reject" onclick="rejectCall()">
+                    <i class="fas fa-phone-slash"></i> 拒绝
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 实时通信客户端 -->
+    <script src="realtime-client.js"></script>
+    <!-- AI语音转录客户端 -->
+    <script src="transcription-client.js"></script>
+    <!-- 主应用脚本 -->
+    <script src="app.js"></script>
+    
+    <!-- 科大讯飞实时语音转写 - 官方SDK -->
+    <!-- CryptoJS库 - 科大讯飞签名认证需要 -->
+    <script src="./libs/crypto-js.min.js"></script>
+    <script src="hmac-sha256.js"></script>
+    <script src="HmacSHA1.js"></script>
+    <script src="md5.js"></script>
+    <script src="enc-base64-min.js"></script>
+    <script src="index.umd.js"></script>
+    <script src="xfyun-rtasr-official.js"></script>
+    
+    <!-- 转录同步调试工具 -->
+    <script src="debug-transcription-sync.js"></script>
+    
+    <script>
+        // 初始化转录客户端
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (typeof TranscriptionClient !== 'undefined') {
+                window.transcriptionClient = new TranscriptionClient();
+                await window.transcriptionClient.init();
+                console.log('🎤 转录客户端已准备就绪');
+            } else {
+                console.warn('⚠️ TranscriptionClient 未找到');
+            }
+            
+            // 初始化科大讯飞转录客户端
+            if (typeof XfyunOfficialRTASR !== 'undefined') {
+                window.xfyunClient = window.xfyunOfficialRTASR;
+                console.log('🎤 科大讯飞转录客户端已准备就绪');
+            } else {
+                console.warn('⚠️ 科大讯飞转录客户端未找到');
+            }
+            
+            // 添加调试功能到全局
+            window.debugConnection = function() {
+                console.log('🔧 开始连接调试...');
+                if (window.realtimeClient) {
+                    return window.realtimeClient.testConnection();
+                } else {
+                    console.error('❌ 实时客户端未初始化');
+                    return false;
+                }
+            };
+            
+            window.testSocketIO = function() {
+                console.log('🧪 测试Socket.IO加载状态...');
+                console.log('Socket.IO库:', typeof io !== 'undefined' ? '✅ 已加载' : '❌ 未加载');
+                if (typeof io !== 'undefined') {
+                    console.log('Socket.IO版本:', io.version || '未知');
+                }
+                
+                if (window.realtimeClient && window.realtimeClient.socket) {
+                    console.log('当前连接状态:', window.realtimeClient.socket.connected);
+                    console.log('传输方式:', window.realtimeClient.socket.io?.engine?.transport?.name);
+                }
+            };
+            
+            console.log('💡 调试提示: 使用 debugConnection() 测试连接，使用 testSocketIO() 检查Socket.IO状态');
+            console.log('💡 科大讯飞调试: 使用 debugXfyunConnection() 检查科大讯飞连接状态');
+        });
+        
+        // 检查通话状态的转录启动函数
+        function checkCallStatusAndStartTranscription(transcriptionType) {
+            // 检查是否在通话中（通话中的所有参与者都可以转录）
+            if (typeof isInCall === 'undefined' || !isInCall) {
+                showToast('请先加入语音通话再使用转录功能', 'warning');
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // 重写Assembly转录启动函数
+        function startTranscription() {
+            if (!checkCallStatusAndStartTranscription('Assembly')) {
+                return;
+            }
+            
+            if (window.transcriptionClient) {
+                window.transcriptionClient.startStreamingMode(roomId);
+                
+                // 记录开始时间
+                window.transcriptionClient.transcriptionStartTime = new Date();
+                
+                // 重置累积内容
+                window.transcriptionClient.fullTranscriptionText = '';
+                
+                // 更新UI
+                document.getElementById('startRecordBtn').style.display = 'none';
+                document.getElementById('stopRecordBtn').style.display = 'block';
+                document.getElementById('downloadBtn').style.display = 'none';
+                
+                // 更新状态
+                const statusDiv = document.getElementById('transcriptionStatus');
+                if (statusDiv) {
+                    const iconSpan = statusDiv.querySelector('i');
+                    const textSpan = statusDiv.querySelector('span');
+                    if (iconSpan && textSpan) {
+                        iconSpan.className = 'fas fa-microphone';
+                        textSpan.textContent = '正在转录...';
+                        statusDiv.style.color = '#22c55e';
+                    }
+                }
+                
+                showToast('开始Assembly语音转录', 'success');
+            } else {
+                showToast('Assembly转录服务未初始化，请刷新页面', 'error');
+            }
+        }
+        
+        // 重写科大讯飞转录启动函数
+        function startXfyunTranscription() {
+            if (!checkCallStatusAndStartTranscription('科大讯飞')) {
+                return;
+            }
+            
+            if (window.xfyunClient) {
+                window.xfyunClient.toggleRecording();
+            } else {
+                showToast('科大讯飞转录服务未初始化', 'error');
+            }
+        }
+        
+        // Assembly AI停止转录函数
+        function stopTranscription() {
+            if (window.transcriptionClient) {
+                window.transcriptionClient.stopStreamingMode();
+                
+                // 更新UI
+                document.getElementById('startRecordBtn').style.display = 'block';
+                document.getElementById('stopRecordBtn').style.display = 'none';
+                
+                // 更新状态
+                const statusDiv = document.getElementById('transcriptionStatus');
+                if (statusDiv) {
+                    const iconSpan = statusDiv.querySelector('i');
+                    const textSpan = statusDiv.querySelector('span');
+                    if (iconSpan && textSpan) {
+                        iconSpan.className = 'fas fa-microphone-slash';
+                        textSpan.textContent = '转录已停止';
+                        statusDiv.style.color = '#6b7280';
+                    }
+                }
+                
+                // 如果有转录内容，显示下载按钮
+                if (window.transcriptionClient.fullTranscriptionText.length > 0) {
+                    document.getElementById('downloadBtn').style.display = 'block';
+                }
+                
+                showToast('Assembly转录已停止', 'info');
+            } else {
+                showToast('Assembly转录服务未初始化，请刷新页面', 'error');
+            }
+        }
+        
+        // 科大讯飞停止转录函数
+        function stopXfyunTranscription() {
+            if (window.xfyunClient) {
+                window.xfyunClient.stopRecording();
+            } else {
+                showToast('科大讯飞转录服务未初始化', 'error');
+            }
+        }
+        
+        // 更新转录按钮状态
+        function updateTranscriptionButtonsState() {
+            const xfyunStartBtn = document.getElementById('xfyunStartBtn');
+            const xfyunStopBtn = document.getElementById('xfyunStopBtn');
+            
+            // 检查是否满足转录条件（仅需要在通话中）
+            const canTranscribe = (typeof isInCall !== 'undefined' && isInCall);
+            
+            if (canTranscribe) {
+                // 通话中 - 启用科大讯飞转录按钮
+                if (xfyunStartBtn) {
+                    xfyunStartBtn.disabled = false;
+                    xfyunStartBtn.title = '开始科大讯飞实时转录';
+                }
+            } else {
+                // 无法转录 - 禁用转录按钮
+                const disabledReason = '请先加入语音通话';
+                
+                if (xfyunStartBtn) {
+                    xfyunStartBtn.disabled = true;
+                    xfyunStartBtn.title = disabledReason;
+                }
+                if (xfyunStopBtn && xfyunStopBtn.style.display !== 'none') {
+                    // 如果正在转录，先停止
+                    stopXfyunTranscription();
+                }
+            }
+        }
+        
+        // 监听通话状态变化
+        function onCallStatusChange() {
+            updateTranscriptionButtonsState();
+        }
+        
+        // 页面加载完成后初始化转录按钮状态
+        document.addEventListener('DOMContentLoaded', function() {
+            // 延迟检查，确保isInCall变量已定义
+            setTimeout(updateTranscriptionButtonsState, 1000);
+        });
+    </script>
+</body>
+</html>

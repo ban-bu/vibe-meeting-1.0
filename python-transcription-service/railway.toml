@@ -1,0 +1,21 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r optimized_requirements.txt"
+watchPatterns = ["optimized_requirements.txt", "optimized_app.py", "**/*.py"]
+
+[deploy]
+startCommand = "python optimized_app.py"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+[env]
+PORT = "${{PORT}}"
+WHISPER_MODEL_SIZE = "tiny"
+MONGODB_URI = "${{MONGODB_URI}}"
+
+# Railway资源优化配置
+PYTHONUNBUFFERED = "1"
+TORCH_HOME = "/tmp"
+HF_HOME = "/tmp"

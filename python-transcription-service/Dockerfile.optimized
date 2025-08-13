@@ -1,0 +1,41 @@
+# 优化的Dockerfile - Railway部署版本
+FROM python:3.11-slim
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV TORCH_HOME=/tmp
+ENV HF_HOME=/tmp
+
+# 安装系统依赖（最小化）
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制优化的requirements文件
+COPY optimized_requirements.txt .
+
+# 安装Python依赖（使用缓存优化）
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r optimized_requirements.txt
+
+# 复制应用代码
+COPY optimized_app.py .
+
+# 创建临时目录（用于模型缓存）
+RUN mkdir -p /tmp/whisper
+
+# 暴露端口
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 启动命令
+CMD ["python", "optimized_app.py"]

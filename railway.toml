@@ -1,0 +1,16 @@
+[build]
+builder = "nixpacks"
+buildCommand = "cd server && npm install"
+
+[deploy]
+startCommand = "node server/server.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+[env]
+NODE_ENV = "production"
+LOG_LEVEL = "error"
+PORT = "${{PORT}}"
+ASSEMBLYAI_API_KEY = "${{ASSEMBLYAI_API_KEY}}"
